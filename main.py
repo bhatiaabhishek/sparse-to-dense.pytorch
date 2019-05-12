@@ -9,6 +9,10 @@ import torch.optim
 cudnn.benchmark = True
 
 from models import ResNet
+from models import SmallNet
+from models import DRNSeg
+from models import DepthCompletionNet
+from models import ERF
 from metrics import AverageMeter, Result
 from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo
 import criteria
@@ -118,14 +122,23 @@ def main():
         print("=> creating Model ({}-{}) ...".format(args.arch, args.decoder))
         in_channels = len(args.modality)
         if args.arch == 'resnet50':
-            model = ResNet(layers=50, decoder=args.decoder, output_size=train_loader.dataset.output_size,
-                in_channels=in_channels, pretrained=args.pretrained)
+    #        model = DRNSeg("drn_d_22", 1, pretrained_model=None,pretrained=False)#ResNet(layers=50, decoder=args.decoder, output_size=train_loader.dataset.output_size,
+            model = DepthCompletionNet(args).cuda()
+            model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
+                #in_channels=in_channels, pretrained=args.pretrained)
+        elif args.arch == 'DRNSeg':
+            model = DRNSeg("drn_d_22", 1, pretrained_model=None,pretrained=False)
+            model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
+        elif args.arch == 'ERF':
+            model = ERF().cuda()
+            model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
         elif args.arch == 'resnet18':
             model = ResNet(layers=18, decoder=args.decoder, output_size=train_loader.dataset.output_size,
                 in_channels=in_channels, pretrained=args.pretrained)
         print("=> model created.")
-        optimizer = torch.optim.SGD(model.parameters(), args.lr, \
-            momentum=args.momentum, weight_decay=args.weight_decay)
+        #optimizer = torch.optim.SGD(model.parameters(), args.lr, \
+        #    momentum=args.momentum, weight_decay=args.weight_decay)
+        optimizer = torch.optim.Adam(model_named_params, lr=args.lr, weight_decay=args.weight_decay)
 
         # model = torch.nn.DataParallel(model).cuda() # for multi-gpu training
         model = model.cuda()
@@ -135,6 +148,7 @@ def main():
         criterion = criteria.MaskedMSELoss().cuda()
     elif args.criterion == 'l1':
         criterion = criteria.MaskedL1Loss().cuda()
+    smoothloss = criteria.SmoothnessLoss().cuda()
 
     # create results folder, if not already exists
     output_directory = utils.get_output_directory(args)
@@ -155,7 +169,7 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         utils.adjust_learning_rate(optimizer, epoch, args.lr)
-        train(train_loader, model, criterion, optimizer, epoch) # train for one epoch
+        train(train_loader, model, criterion,smoothloss, optimizer, epoch) # train for one epoch
         result, img_merge = validate(val_loader, model, epoch) # evaluate on validation set
 
         # remember best rmse and save checkpoint
@@ -179,20 +193,23 @@ def main():
         }, is_best, epoch, output_directory)
 
 
-def train(train_loader, model, criterion, optimizer, epoch):
+def train(train_loader, model, criterion,smoothloss, optimizer, epoch):
     average_meter = AverageMeter()
     model.train() # switch to train mode
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
-
         input, target = input.cuda(), target.cuda()
         torch.cuda.synchronize()
         data_time = time.time() - end
 
         # compute pred
         end = time.time()
-        pred = model(input)
-        loss = criterion(pred, target)
+        #pred = model(input[:,3:,:,:],input[:,:3,:,:]) # (depth,image)
+        candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":input[:,3:,:,:]}
+        batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
+        pred = model(batch_data) # (depth,image)
+        #loss = criterion(pred, input[:,3:,:,:]) + 0.01*smoothloss(pred)
+        loss = criterion(pred, target) + 0.01*smoothloss(pred)
         optimizer.zero_grad()
         loss.backward() # compute gradient and do SGD step
         optimizer.step()
@@ -208,6 +225,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if (i + 1) % args.print_freq == 0:
             print('=> output: {}'.format(output_directory))
             print('Train Epoch: {0} [{1}/{2}]\t'
+                  'LOSS={loss:.3f} '
                   't_Data={data_time:.3f}({average.data_time:.3f}) '
                   't_GPU={gpu_time:.3f}({average.gpu_time:.3f})\n\t'
                   'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
@@ -215,7 +233,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                   'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
                   'REL={result.absrel:.3f}({average.absrel:.3f}) '
                   'Lg10={result.lg10:.3f}({average.lg10:.3f}) '.format(
-                  epoch, i+1, len(train_loader), data_time=data_time,
+                  epoch, i+1, len(train_loader),loss=loss.item(), data_time=data_time,
                   gpu_time=gpu_time, result=result, average=average_meter.average()))
 
     avg = average_meter.average()
@@ -238,7 +256,10 @@ def validate(val_loader, model, epoch, write_to_file=True):
         # compute output
         end = time.time()
         with torch.no_grad():
-            pred = model(input)
+            #pred = model(input[:,3:,:,:],input[:,:3,:,:])
+            candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":target}
+            batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
+            pred = model(batch_data) # (depth,image)
         torch.cuda.synchronize()
         gpu_time = time.time() - end
 

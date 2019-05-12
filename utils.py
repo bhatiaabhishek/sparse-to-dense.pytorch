@@ -8,7 +8,7 @@ from PIL import Image
 cmap = plt.cm.viridis
 
 def parse_command():
-    model_names = ['resnet18', 'resnet50']
+    model_names = ['resnet18', 'resnet50','ERF','DRNSeg']
     loss_names = ['l1', 'l2']
     data_names = ['nyudepthv2', 'kitti']
     from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo
@@ -56,6 +56,8 @@ def parse_command():
                         help='evaluate model on validation set')
     parser.add_argument('--no-pretrain', dest='pretrained', action='store_false',
                         help='not to use ImageNet pre-trained weights')
+    parser.add_argument('-l','--layers', type=int, default=34,
+                    help='use 16 for sparse_conv; use 18 or 34 for resnet')
     parser.set_defaults(pretrained=True)
     args = parser.parse_args()
     if args.modality == 'rgb' and args.num_samples != 0:
