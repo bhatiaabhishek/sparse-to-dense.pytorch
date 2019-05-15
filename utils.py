@@ -8,7 +8,7 @@ from PIL import Image
 cmap = plt.cm.viridis
 
 def parse_command():
-    model_names = ['resnet18', 'resnet50','ERF','DRNSeg']
+    model_names = ['resnet18', 'resnet50','ERF','DRNSeg','UNET','SmallNet']
     loss_names = ['l1', 'l2']
     data_names = ['nyudepthv2', 'kitti']
     from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo

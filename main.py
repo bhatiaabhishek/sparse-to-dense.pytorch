@@ -122,10 +122,14 @@ def main():
         print("=> creating Model ({}-{}) ...".format(args.arch, args.decoder))
         in_channels = len(args.modality)
         if args.arch == 'resnet50':
-    #        model = DRNSeg("drn_d_22", 1, pretrained_model=None,pretrained=False)#ResNet(layers=50, decoder=args.decoder, output_size=train_loader.dataset.output_size,
+            model = ResNet(layers=50, decoder=args.decoder, output_size=train_loader.dataset.output_size,
+                in_channels=in_channels, pretrained=args.pretrained)
+        elif args.arch == 'SmallNet':
+            model = SmallNet().cuda()
+            model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
+        elif args.arch == 'UNET':
             model = DepthCompletionNet(args).cuda()
             model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
-                #in_channels=in_channels, pretrained=args.pretrained)
         elif args.arch == 'DRNSeg':
             model = DRNSeg("drn_d_22", 1, pretrained_model=None,pretrained=False)
             model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]

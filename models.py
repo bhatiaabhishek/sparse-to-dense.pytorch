@@ -204,7 +204,7 @@ class DRNSeg(nn.Module):
 
 class SmallNet(nn.Module):
     def __init__(self):
-        super(SmallNet,self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(1,16,5)
         self.conv_img = nn.Conv2d(3,16,5)
         self.bn1 = BatchNorm(16)
@@ -218,10 +218,11 @@ class SmallNet(nn.Module):
 
 
     def forward(self,x):
-        rgbd = torch.cat((x['d'], x['rgb']),1)
-        ip0 = rgbd.shape[-2]
-        ip1 = rgbd.shape[-1]
-        x = F.relu(self.bn1(self.conv1(rgbd)))
+        d = x['d']
+        img = x['rgb']
+        ip0 = img.shape[-2]
+        ip1 = img.shape[-1]
+        x = F.relu(self.bn1(self.conv1(d)))
         img = F.relu(self.bn_img(self.conv_img(img)))
         concat_feat = torch.cat((x,img),dim=1)
         x = self.pool2(F.relu(self.bn2(self.conv2(concat_feat))))
