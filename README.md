@@ -46,9 +46,9 @@ The training scripts come with several options, which can be listed with the `--
 python3 main.py --help
 ```
 
-For instance, run the following command to train a network with ResNet50 as the encoder, deconvolutions of kernel size 3 as the decoder, and both RGB and 100 random sparse depth samples as the input to the network.
+For instance, run the following command to train a network with UNET-based encoder-decoded, and both RGB and 200 random sparse depth samples as the input to the network with a batch size 4.
 ```bash
-python3 main.py -a resnet50 -d deconv3 -m rgbd -s 100 --data nyudepthv2
+python3 main.py -a UNET -m rgbd -s 200 --data nyudepthv2 --lr 0.00001 --batch-size 4
 ```
 
 Training results will be saved under the `results` folder. To resume a previous training, run
