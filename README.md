@@ -1,5 +1,6 @@
 sparse-to-dense.pytorch
 ============================
+FOR CS230 TAs: Refer to "Training" section
 
 This repo implements the training and testing of deep regression neural networks for ["Sparse-to-Dense: Depth Prediction from Sparse Depth Samples and a Single Image"](https://arxiv.org/pdf/1709.07492.pdf) by [Fangchang Ma](http://www.mit.edu/~fcma) and [Sertac Karaman](http://karaman.mit.edu/) at MIT. A video demonstration is available on [YouTube](https://youtu.be/vNIIT_M7x7Y).
 <p align="center">
@@ -46,7 +47,7 @@ The training scripts come with several options, which can be listed with the `--
 python3 main.py --help
 ```
 
-For instance, run the following command to train a network with UNET-based encoder-decoded, and both RGB and 200 random sparse depth samples as the input to the network with a batch size 4.
+For CS230 TAs, run the following command to train a network with UNET-based encoder-decoded, and both RGB and 200 random sparse depth samples as the input to the network with a batch size 4.
 ```bash
 python3 main.py -a UNET -m rgbd -s 200 --data nyudepthv2 --lr 0.00001 --batch-size 4
 ```
