@@ -15,6 +15,7 @@ from models import DepthCompletionNet
 from models import ERF
 from metrics import AverageMeter, Result
 from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo
+from homography import Intrinsics, homography_from
 import criteria
 import utils
 
@@ -153,6 +154,7 @@ def main():
     elif args.criterion == 'l1':
         criterion = criteria.MaskedL1Loss().cuda()
     smoothloss = criteria.SmoothnessLoss().cuda()
+    photometric_loss = criteria.PhotometricLoss().cuda()
 
     # create results folder, if not already exists
     output_directory = utils.get_output_directory(args)
@@ -173,7 +175,7 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         utils.adjust_learning_rate(optimizer, epoch, args.lr)
-        train(train_loader, model, criterion,smoothloss, optimizer, epoch) # train for one epoch
+        train(train_loader, model, criterion,smoothloss, photometric_loss, optimizer, epoch) # train for one epoch
         result, img_merge = validate(val_loader, model, epoch) # evaluate on validation set
 
         # remember best rmse and save checkpoint
@@ -197,23 +199,40 @@ def main():
         }, is_best, epoch, output_directory)
 
 
-def train(train_loader, model, criterion,smoothloss, optimizer, epoch):
+def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, epoch):
     average_meter = AverageMeter()
     model.train() # switch to train mode
     end = time.time()
-    for i, (input, target) in enumerate(train_loader):
-        input, target = input.cuda(), target.cuda()
+    iheight, iwidth = 480, 640 # raw image size
+    fx_rgb = 5.1885790117450188e+02;
+    fy_rgb = 5.1946961112127485e+02;
+    cx_rgb = 3.2558244941119034e+02;
+    cy_rgb = 2.5373616633400465e+02;
+    new_intrinsics = Intrinsics(304,228,fx_rgb*(250.0/iheight),fy_rgb*(250.0/iheight)).cuda()
+    for i, (batch_data, intrinsics) in enumerate(train_loader):
+        #input, target = input.cuda(), target.cuda()
+        batch_data = {key:val.cuda() for key,val in batch_data.items() if val is not None}
+        oheight, owidth = intrinsics["output_size"]
+        #new_intrinsics = Intrinsics(owidth,oheight,intrinsics["fx"],intrinsics["fy"],intrinsics["cx"],intrinsics["cy"]).cuda()
+        target = batch_data['gt']
         torch.cuda.synchronize()
         data_time = time.time() - end
 
         # compute pred
         end = time.time()
         #pred = model(input[:,3:,:,:],input[:,:3,:,:]) # (depth,image)
-        candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":input[:,3:,:,:]}
-        batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
+        #candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":input[:,3:,:,:]}
+        #batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
         pred = model(batch_data) # (depth,image)
         #loss = criterion(pred, input[:,3:,:,:]) + 0.01*smoothloss(pred)
-        loss = criterion(pred, target) + 0.01*smoothloss(pred)
+        photoloss = 0.0
+        if args.use_pose:
+            # warp near frame to current frame
+            #hh, ww = pred.size(2), pred.size(3)
+            #new_intrinsics = new_intrinsics.scale(hh,ww)
+            warped = homography_from(batch_data["rgb_near"],pred,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
+            photoloss = photometric_loss(batch_data["rgb"],warped)
+        loss = criterion(pred, target) + 0.01*smoothloss(pred) + 0.01*photoloss
         optimizer.zero_grad()
         loss.backward() # compute gradient and do SGD step
         optimizer.step()
@@ -223,7 +242,7 @@ def train(train_loader, model, criterion,smoothloss, optimizer, epoch):
         # measure accuracy and record loss
         result = Result()
         result.evaluate(pred.data, target.data)
-        average_meter.update(result, gpu_time, data_time, input.size(0))
+        average_meter.update(result, gpu_time, data_time, batch_data['rgb'].size(0))
         end = time.time()
 
         if (i + 1) % args.print_freq == 0:
@@ -252,8 +271,10 @@ def validate(val_loader, model, epoch, write_to_file=True):
     average_meter = AverageMeter()
     model.eval() # switch to evaluate mode
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
-        input, target = input.cuda(), target.cuda()
+    for i, (batch_data,intrinsics) in enumerate(val_loader):
+        #input, target = input.cuda(), target.cuda()
+        batch_data = {key:val.cuda() for key,val in batch_data.items() if val is not None}
+        target = batch_data['gt']
         torch.cuda.synchronize()
         data_time = time.time() - end
 
@@ -261,8 +282,8 @@ def validate(val_loader, model, epoch, write_to_file=True):
         end = time.time()
         with torch.no_grad():
             #pred = model(input[:,3:,:,:],input[:,:3,:,:])
-            candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":target}
-            batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
+            #candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":target}
+            #batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
             pred = model(batch_data) # (depth,image)
         torch.cuda.synchronize()
         gpu_time = time.time() - end
@@ -270,7 +291,7 @@ def validate(val_loader, model, epoch, write_to_file=True):
         # measure accuracy and record loss
         result = Result()
         result.evaluate(pred.data, target.data)
-        average_meter.update(result, gpu_time, data_time, input.size(0))
+        average_meter.update(result, gpu_time, data_time, batch_data['rgb'].size(0))
         end = time.time()
 
         # save 8 images for visualization
@@ -279,10 +300,10 @@ def validate(val_loader, model, epoch, write_to_file=True):
             img_merge = None
         else:
             if args.modality == 'rgb':
-                rgb = input
+                rgb = batch_data['rgb']
             elif args.modality == 'rgbd':
-                rgb = input[:,:3,:,:]
-                depth = input[:,3:,:,:]
+                rgb = batch_data['rgb']
+                depth = batch_data['d']
 
             if i == 0:
                 if args.modality == 'rgbd':

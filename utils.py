@@ -52,6 +52,8 @@ def parse_command():
                         metavar='N', help='print frequency (default: 10)')
     parser.add_argument('--resume', default='', type=str, metavar='PATH',
                         help='path to latest checkpoint (default: none)')
+    parser.add_argument('--use_pose', default='', type=str,
+                        help='Whether to use pose for photometric error (default: none)')
     parser.add_argument('-e', '--evaluate', dest='evaluate', type=str, default='',
                         help='evaluate model on validation set')
     parser.add_argument('--no-pretrain', dest='pretrained', action='store_false',
@@ -87,10 +89,10 @@ def adjust_learning_rate(optimizer, epoch, lr_init):
 
 def get_output_directory(args):
     output_directory = os.path.join('results',
-        '{}.sparsifier={}.samples={}.modality={}.arch={}.decoder={}.criterion={}.lr={}.bs={}.pretrained={}'.
+        '{}.sparsifier={}.samples={}.modality={}.arch={}.decoder={}.criterion={}.lr={}.bs={}.pretrained={}.use_pose={}'.
         format(args.data, args.sparsifier, args.num_samples, args.modality, \
             args.arch, args.decoder, args.criterion, args.lr, args.batch_size, \
-            args.pretrained))
+            args.pretrained, args.use_pose))
     return output_directory
 
 
