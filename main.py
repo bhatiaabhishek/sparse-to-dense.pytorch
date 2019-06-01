@@ -15,6 +15,7 @@ from models import DepthCompletionNet
 from models import ERF
 from metrics import AverageMeter, Result
 from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo
+from dataloaders import multiscale
 from homography import Intrinsics, homography_from
 import criteria
 import utils
@@ -208,7 +209,7 @@ def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, 
     fy_rgb = 5.1946961112127485e+02;
     cx_rgb = 3.2558244941119034e+02;
     cy_rgb = 2.5373616633400465e+02;
-    new_intrinsics = Intrinsics(304,228,fx_rgb*(250.0/iheight),fy_rgb*(250.0/iheight)).cuda()
+    new_intrinsics = Intrinsics(304,228,fx_rgb*(250.0/iheight),fy_rgb*(250.0/iheight),155.1, 121.0).cuda()
     for i, (batch_data, intrinsics) in enumerate(train_loader):
         #input, target = input.cuda(), target.cuda()
         batch_data = {key:val.cuda() for key,val in batch_data.items() if val is not None}
@@ -230,9 +231,29 @@ def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, 
             # warp near frame to current frame
             #hh, ww = pred.size(2), pred.size(3)
             #new_intrinsics = new_intrinsics.scale(hh,ww)
-            warped = homography_from(batch_data["rgb_near"],pred,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
-            photoloss = photometric_loss(batch_data["rgb"],warped)
-        loss = criterion(pred, target) + 0.01*smoothloss(pred) + 0.01*photoloss
+            mask = (batch_data['d'] < 1e-3).float()
+            pred_array = multiscale(pred)
+            rgb_curr_array = multiscale(batch_data['rgb'])
+            rgb_near_array = multiscale(batch_data['rgb_near'])
+            mask_array = multiscale(mask)
+            num_scales = len(pred_array)
+            # compute photometric loss at multiple scales
+            for scale in range(len(pred_array)):
+                pred_ = pred_array[scale]
+                rgb_curr_ = rgb_curr_array[scale]
+                rgb_near_ = rgb_near_array[scale]
+                mask_ = None
+                if mask is not None:
+                    mask_ = mask_array[scale]
+
+                # compute the corresponding intrinsic parameters
+                height_, width_ = pred_.size(2), pred_.size(3)
+                intrinsics_ = kitti_intrinsics.scale(height_, width_)
+                warped_ = homography_from(rgb_near_,pred_,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
+                #warped = homography_from(batch_data["rgb_near"],pred,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
+                #photoloss = photometric_loss(batch_data["rgb"],warped,mask)
+                photoloss += photometric_loss(rgb_curr_,warped_,mask_)*(2**(scale-num_scales))
+        loss = criterion(pred, target) + 0.01*smoothloss(pred) + 0.1*photoloss
         optimizer.zero_grad()
         loss.backward() # compute gradient and do SGD step
         optimizer.step()

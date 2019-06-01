@@ -9,6 +9,14 @@ from estimate_pose import get_pose
 
 IMG_EXTENSIONS = ['.h5',]
 
+def multiscale(img):
+    img1 = avgpool(img)
+    img2 = avgpool(img1)
+    img3 = avgpool(img2)
+    img4 = avgpool(img3)
+    img5 = avgpool(img4)
+    return img5, img4, img3, img2, img1
+
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
@@ -183,6 +191,7 @@ class MyDataloader(data.Dataset):
                       "r_mat":rot_mat, "t_vec":t_vec, "rgb_near":rgb_near_np}
 
 
+        #print(self.K)
         intrinsics = {"fx":self.K[0,0],
                       "fy":self.K[1,1],
                       "cx":self.K[0,2],
