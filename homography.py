@@ -1,6 +1,15 @@
 import torch
 import torch.nn.functional as F
 
+avgpool = torch.nn.AvgPool2d(kernel_size=2, stride=2).cuda()
+def multiscale(img):
+    img1 = avgpool(img)
+    img2 = avgpool(img1)
+    img3 = avgpool(img2)
+    img4 = avgpool(img3)
+    img5 = avgpool(img4)
+    return img5, img4, img3, img2, img1
+
 class Intrinsics:
     def __init__(self, width, height, fu, fv, cu=0, cv=0):
         self.height, self.width = height, width

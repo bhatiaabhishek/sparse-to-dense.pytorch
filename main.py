@@ -15,8 +15,7 @@ from models import DepthCompletionNet
 from models import ERF
 from metrics import AverageMeter, Result
 from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo
-from dataloaders import multiscale
-from homography import Intrinsics, homography_from
+from homography import Intrinsics, homography_from, multiscale
 import criteria
 import utils
 
@@ -248,8 +247,8 @@ def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, 
 
                 # compute the corresponding intrinsic parameters
                 height_, width_ = pred_.size(2), pred_.size(3)
-                intrinsics_ = kitti_intrinsics.scale(height_, width_)
-                warped_ = homography_from(rgb_near_,pred_,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
+                intrinsics_ = new_intrinsics.scale(height_, width_)
+                warped_ = homography_from(rgb_near_,pred_,batch_data["r_mat"],batch_data["t_vec"],intrinsics_)
                 #warped = homography_from(batch_data["rgb_near"],pred,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
                 #photoloss = photometric_loss(batch_data["rgb"],warped,mask)
                 photoloss += photometric_loss(rgb_curr_,warped_,mask_)*(2**(scale-num_scales))

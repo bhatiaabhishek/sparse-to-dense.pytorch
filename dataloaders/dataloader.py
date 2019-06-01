@@ -9,13 +9,6 @@ from estimate_pose import get_pose
 
 IMG_EXTENSIONS = ['.h5',]
 
-def multiscale(img):
-    img1 = avgpool(img)
-    img2 = avgpool(img1)
-    img3 = avgpool(img2)
-    img4 = avgpool(img3)
-    img5 = avgpool(img4)
-    return img5, img4, img3, img2, img1
 
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
