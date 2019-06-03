@@ -2,6 +2,7 @@ import os
 import time
 import csv
 import numpy as np
+import copy
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -13,6 +14,7 @@ from models import SmallNet
 from models import DRNSeg
 from models import DepthCompletionNet
 from models import ERF
+from models import ERF_N
 from metrics import AverageMeter, Result
 from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo
 from homography import Intrinsics, homography_from, multiscale
@@ -97,7 +99,7 @@ def main():
         print("=> loaded best model (epoch {})".format(checkpoint['epoch']))
         _, val_loader = create_data_loaders(args)
         args.evaluate = True
-        validate(val_loader, model, checkpoint['epoch'], write_to_file=False)
+        validate(val_loader, model, model_N,checkpoint['epoch'], write_to_file=False)
         return
 
     # optionally resume from a checkpoint
@@ -111,6 +113,7 @@ def main():
         start_epoch = checkpoint['epoch'] + 1
         best_result = checkpoint['best_result']
         model = checkpoint['model']
+        model_N = checkpoint['model_N']
         optimizer = checkpoint['optimizer']
         output_directory = os.path.dirname(os.path.abspath(chkpt_path))
         print("=> loaded checkpoint (epoch {})".format(checkpoint['epoch']))
@@ -122,6 +125,7 @@ def main():
         train_loader, val_loader = create_data_loaders(args)
         print("=> creating Model ({}-{}) ...".format(args.arch, args.decoder))
         in_channels = len(args.modality)
+        model_N = None
         if args.arch == 'resnet50':
             model = ResNet(layers=50, decoder=args.decoder, output_size=train_loader.dataset.output_size,
                 in_channels=in_channels, pretrained=args.pretrained)
@@ -130,7 +134,9 @@ def main():
             model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
         elif args.arch == 'UNET':
             model = DepthCompletionNet(args).cuda()
+            model_N = ERF_N().cuda()
             model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
+            [model_named_params.append(pn) for _,pn in model_N.named_parameters() if pn.requires_grad]
         elif args.arch == 'DRNSeg':
             model = DRNSeg("drn_d_22", 1, pretrained_model=None,pretrained=False)
             model_named_params = [p for _,p in model.named_parameters() if p.requires_grad]
@@ -155,6 +161,7 @@ def main():
         criterion = criteria.MaskedL1Loss().cuda()
     smoothloss = criteria.SmoothnessLoss().cuda()
     photometric_loss = criteria.PhotometricLoss().cuda()
+    normal_loss = criteria.MaskedNormalLoss().cuda()
 
     # create results folder, if not already exists
     output_directory = utils.get_output_directory(args)
@@ -175,8 +182,8 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         utils.adjust_learning_rate(optimizer, epoch, args.lr)
-        train(train_loader, model, criterion,smoothloss, photometric_loss, optimizer, epoch) # train for one epoch
-        result, img_merge = validate(val_loader, model, epoch) # evaluate on validation set
+        train(train_loader, model, model_N, criterion,smoothloss, photometric_loss, normal_loss, optimizer, epoch) # train for one epoch
+        result, img_merge = validate(val_loader, model, model_N, epoch) # evaluate on validation set
 
         # remember best rmse and save checkpoint
         is_best = result.rmse < best_result.rmse
@@ -194,14 +201,16 @@ def main():
             'epoch': epoch,
             'arch': args.arch,
             'model': model,
+            'model_N': model_N,
             'best_result': best_result,
             'optimizer' : optimizer,
         }, is_best, epoch, output_directory)
 
 
-def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, epoch):
+def train(train_loader, model, model_N, criterion,smoothloss,photometric_loss,normal_loss,optimizer, epoch):
     average_meter = AverageMeter()
     model.train() # switch to train mode
+    model_N.train() # switch to train mode
     end = time.time()
     iheight, iwidth = 480, 640 # raw image size
     fx_rgb = 5.1885790117450188e+02;
@@ -214,6 +223,7 @@ def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, 
         batch_data = {key:val.cuda() for key,val in batch_data.items() if val is not None}
         oheight, owidth = intrinsics["output_size"]
         #new_intrinsics = Intrinsics(owidth,oheight,intrinsics["fx"],intrinsics["fy"],intrinsics["cx"],intrinsics["cy"]).cuda()
+        #target = batch_data['gt']
         target = batch_data['gt']
         torch.cuda.synchronize()
         data_time = time.time() - end
@@ -223,36 +233,37 @@ def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, 
         #pred = model(input[:,3:,:,:],input[:,:3,:,:]) # (depth,image)
         #candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":input[:,3:,:,:]}
         #batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
-        pred = model(batch_data) # (depth,image)
+        pred_N = model_N(batch_data)
+        pred = model(batch_data, pred_N) # (depth,image)
         #loss = criterion(pred, input[:,3:,:,:]) + 0.01*smoothloss(pred)
         photoloss = 0.0
-        if args.use_pose:
-            # warp near frame to current frame
-            #hh, ww = pred.size(2), pred.size(3)
-            #new_intrinsics = new_intrinsics.scale(hh,ww)
-            mask = (batch_data['d'] < 1e-3).float()
-            pred_array = multiscale(pred)
-            rgb_curr_array = multiscale(batch_data['rgb'])
-            rgb_near_array = multiscale(batch_data['rgb_near'])
-            mask_array = multiscale(mask)
-            num_scales = len(pred_array)
-            # compute photometric loss at multiple scales
-            for scale in range(len(pred_array)):
-                pred_ = pred_array[scale]
-                rgb_curr_ = rgb_curr_array[scale]
-                rgb_near_ = rgb_near_array[scale]
-                mask_ = None
-                if mask is not None:
-                    mask_ = mask_array[scale]
+        #if args.use_pose:
+        #    # warp near frame to current frame
+        #    #hh, ww = pred.size(2), pred.size(3)
+        #    #new_intrinsics = new_intrinsics.scale(hh,ww)
+        #    mask = (batch_data['d'] < 1e-3).float()
+        #    pred_array = multiscale(pred)
+        #    rgb_curr_array = multiscale(batch_data['rgb'])
+        #    rgb_near_array = multiscale(batch_data['rgb_near'])
+        #    mask_array = multiscale(mask)
+        #    num_scales = len(pred_array)
+        #    # compute photometric loss at multiple scales
+        #    for scale in range(len(pred_array)):
+        #        pred_ = pred_array[scale]
+        #        rgb_curr_ = rgb_curr_array[scale]
+        #        rgb_near_ = rgb_near_array[scale]
+        #        mask_ = None
+        #        if mask is not None:
+        #            mask_ = mask_array[scale]
 
-                # compute the corresponding intrinsic parameters
-                height_, width_ = pred_.size(2), pred_.size(3)
-                intrinsics_ = new_intrinsics.scale(height_, width_)
-                warped_ = homography_from(rgb_near_,pred_,batch_data["r_mat"],batch_data["t_vec"],intrinsics_)
-                #warped = homography_from(batch_data["rgb_near"],pred,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
-                #photoloss = photometric_loss(batch_data["rgb"],warped,mask)
-                photoloss += photometric_loss(rgb_curr_,warped_,mask_)*(2**(scale-num_scales))
-        loss = criterion(pred, target) + 0.01*smoothloss(pred) + 0.1*photoloss
+        #        # compute the corresponding intrinsic parameters
+        #        height_, width_ = pred_.size(2), pred_.size(3)
+        #        intrinsics_ = new_intrinsics.scale(height_, width_)
+        #        warped_ = homography_from(rgb_near_,pred_,batch_data["r_mat"],batch_data["t_vec"],intrinsics_)
+        #        #warped = homography_from(batch_data["rgb_near"],pred,batch_data["r_mat"],batch_data["t_vec"],new_intrinsics)
+        #        #photoloss = photometric_loss(batch_data["rgb"],warped,mask)
+        #        photoloss += photometric_loss(rgb_curr_,warped_,mask_)*(2**(scale-num_scales))
+        loss = criterion(pred, target) + 0.01*smoothloss(pred) + 0.5*photoloss + 0.1*normal_loss(pred_N,batch_data['normals'])
         optimizer.zero_grad()
         loss.backward() # compute gradient and do SGD step
         optimizer.step()
@@ -287,9 +298,11 @@ def train(train_loader, model, criterion,smoothloss,photometric_loss,optimizer, 
             'gpu_time': avg.gpu_time, 'data_time': avg.data_time})
 
 
-def validate(val_loader, model, epoch, write_to_file=True):
+def validate(val_loader, model, model_N, epoch, write_to_file=True):
     average_meter = AverageMeter()
     model.eval() # switch to evaluate mode
+    if model_N:
+        model_N.eval()
     end = time.time()
     for i, (batch_data,intrinsics) in enumerate(val_loader):
         #input, target = input.cuda(), target.cuda()
@@ -304,7 +317,8 @@ def validate(val_loader, model, epoch, write_to_file=True):
             #pred = model(input[:,3:,:,:],input[:,:3,:,:])
             #candidates = {"rgb":input[:,:3,:,:], "d":input[:,3:,:,:], "gt":target}
             #batch_data = {key:val.cuda() for key,val in candidates.items() if val is not None}
-            pred = model(batch_data) # (depth,image)
+            pred_N = model_N(batch_data)
+            pred = model(batch_data, pred_N) # (depth,image)
         torch.cuda.synchronize()
         gpu_time = time.time() - end
 
@@ -327,12 +341,12 @@ def validate(val_loader, model, epoch, write_to_file=True):
 
             if i == 0:
                 if args.modality == 'rgbd':
-                    img_merge = utils.merge_into_row_with_gt(rgb, depth, target, pred)
+                    img_merge = utils.merge_into_row_with_gt(rgb, depth, target, pred,pred_N)
                 else:
                     img_merge = utils.merge_into_row(rgb, target, pred)
             elif (i < 8*skip) and (i % skip == 0):
                 if args.modality == 'rgbd':
-                    row = utils.merge_into_row_with_gt(rgb, depth, target, pred)
+                    row = utils.merge_into_row_with_gt(rgb, depth, target, pred,pred_N)
                 else:
                     row = utils.merge_into_row(rgb, target, pred)
                 img_merge = utils.add_row(img_merge, row)

@@ -15,6 +15,37 @@ def P_2D_3D(u,v,d,K):
     return (x,y,d)
 
 
+def estimate_normals(depth):
+    H,W = depth.shape
+    normal_map = np.zeros(shape=(H,W,3))
+    for h in range(0,H):
+        for w in range(0,W):
+            
+            if (depth[h,w] > 0):
+                dzdy = (depth[min(h+1,H-1),w] - depth[max(h-1,0),w])/2.0
+                dzdx = (depth[h,min(w+1,W-1)] - depth[h,max(w-1,0)])/2.0
+ 
+                n = np.array([-dzdx,-dzdy,1.0])
+            
+                n = n/np.linalg.norm(n)
+            else:
+                n = np.array([0,0,0])
+            normal_map[h,w,:] = n
+
+
+    #N = normal_map.copy()
+    min_n, max_n = np.percentile(normal_map,[5,95],axis=(0,1))
+    #print(min_n)
+    #N[N<min_n] = min_n
+    #N[N>max_n] = max_n
+    #N = (N-min_n)/(max_n-min_n)
+    #plt.imshow(N)
+    #plt.show()
+
+
+    return normal_map 
+
+
 def feature_match(img1, img2):
    r''' Find features on both images and match them pairwise
    '''

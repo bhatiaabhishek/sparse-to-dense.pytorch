@@ -119,19 +119,22 @@ def merge_into_row(input, depth_target, depth_pred):
     return img_merge
 
 
-def merge_into_row_with_gt(input, depth_input, depth_target, depth_pred):
+def merge_into_row_with_gt(input, depth_input, depth_target, depth_pred,normal_pred):
     rgb = 255 * np.transpose(np.squeeze(input.cpu().numpy()), (1,2,0)) # H, W, C
     depth_input_cpu = np.squeeze(depth_input.cpu().numpy())
     depth_target_cpu = np.squeeze(depth_target.cpu().numpy())
     depth_pred_cpu = np.squeeze(depth_pred.data.cpu().numpy())
+    normal_pred_cpu = np.squeeze(normal_pred.data.cpu().numpy())
 
     d_min = min(np.min(depth_input_cpu), np.min(depth_target_cpu), np.min(depth_pred_cpu))
     d_max = max(np.max(depth_input_cpu), np.max(depth_target_cpu), np.max(depth_pred_cpu))
+    n_min, n_max = np.percentile(normal_pred_cpu,[5,95],axis=(1,2))
     depth_input_col = colored_depthmap(depth_input_cpu, d_min, d_max)
     depth_target_col = colored_depthmap(depth_target_cpu, d_min, d_max)
     depth_pred_col = colored_depthmap(depth_pred_cpu, d_min, d_max)
+    normal_pred_col = colored_depthmap(normal_pred_cpu, n_min, n_max)
 
-    img_merge = np.hstack([rgb, depth_input_col, depth_target_col, depth_pred_col])
+    img_merge = np.hstack([rgb, depth_input_col, depth_target_col, depth_pred_col,normal_pred_col])
 
     return img_merge
 

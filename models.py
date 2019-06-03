@@ -103,7 +103,6 @@ class UpConv(Decoder):
         self.layer3 = self.upconv_module(in_channels//4)
         self.layer4 = self.upconv_module(in_channels//8)
 
-
 class DRNSeg(nn.Module):
     def __init__(self, model_name, classes, pretrained_model=None,
                  pretrained=True, use_torch_up=False):
@@ -135,7 +134,7 @@ class DRNSeg(nn.Module):
         #self.relu2 = nn.ReLU()
 
         self.last_conv = nn.Sequential(
-                                       nn.Conv2d(576, 512, kernel_size=3, stride=1, padding=1, bias=False),
+                                       nn.Conv2d(704, 512, kernel_size=3, stride=1, padding=1, bias=False),
                                        nn.BatchNorm2d(512),
                                        nn.ReLU())
         for m in self.last_conv.modules():
@@ -166,13 +165,13 @@ class DRNSeg(nn.Module):
     def forward(self,x_inp):
         x_input = x_inp['d']
         x_rgb = x_inp['rgb']
-        x = F.relu(self.conv1(x_input))
+        x = F.relu(self.bn1(self.conv1(x_input)))
         img = F.relu(self.bn_img(self.conv_img(x_rgb)))
         concat_feat = torch.cat((x,img),dim=1)
-        base_x, low_level_feat  = self.base(concat_feat)
+        base_x, low_level_feats  = self.base(concat_feat)
         x = self.aspp(base_x)
-        #print(x.size())
         #print(low_level_feat.size())
+        x = torch.cat((x,low_level_feats[3]),dim=1)
         x = F.interpolate(x, size=(int(math.ceil(-1+x_input.size()[-2]/4)),
                                             int(math.ceil(-1+x_input.size()[-1]/4))), mode='bilinear', align_corners=True)
         #print("bfor up = ", x.shape)
@@ -181,7 +180,7 @@ class DRNSeg(nn.Module):
         #llf = self.conv2(low_level_feat)
         #llf = self.bn2(llf)
         #llf = self.relu2(llf)
-        x = torch.cat((x,low_level_feat),dim=1)
+        x = torch.cat((x,low_level_feats[2]),dim=1)
         x = self.last_conv(x)
         x = self.seg(x)
         #y = self.up(x)
@@ -190,17 +189,104 @@ class DRNSeg(nn.Module):
 
         return y
 
-    def optim_parameters(self, memo=None):
-        for param in self.base.parameters():
-            yield param
-        for param in self.aspp.parameters():
-            yield param
-        for param in self.seg.parameters():
-            yield param
-        for param in self.last_conv.parameters():
-            yield param
-        for param in self.up.parameters():
-            yield param
+
+#class DRNSeg(nn.Module):
+#    def __init__(self, model_name, classes, pretrained_model=None,
+#                 pretrained=True, use_torch_up=False):
+#        super(DRNSeg, self).__init__()
+#        self.conv1 = nn.Conv2d(1,16,5)
+#        self.conv_img = nn.Conv2d(3,16,5)
+#        self.bn1 = BatchNorm(16)
+#        self.bn_img = BatchNorm(16)
+#        model = drn.__dict__.get(model_name)(
+#            pretrained=pretrained, num_classes=1)
+#        pmodel = nn.DataParallel(model)
+#        if pretrained_model is not None:
+#            pmodel.load_state_dict(pretrained_model)
+#        self.base = model #nn.Sequential(*list(model.children())[:-2])
+#        self.aspp = drn.aspp([[512,512,1],
+#                              [512,512,6],
+#                              [512,512,12],
+#                              [512,512,18]])
+#        self.seg = nn.Conv2d(512, classes,
+#                             kernel_size=1, bias=True)
+#        self.softmax = nn.LogSoftmax(dim=1)
+#        m = self.seg
+#        n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+#        m.weight.data.normal_(0, math.sqrt(2. / n))
+#        m.bias.data.zero_()
+#        ## [1x1, 32] for channel reduction.
+#        #self.conv2 = nn.Conv2d(64, 32, 1, bias=False)
+#        #self.bn2 = nn.BatchNorm2d(32)
+#        #self.relu2 = nn.ReLU()
+#
+#        self.last_conv = nn.Sequential(
+#                                       nn.Conv2d(576, 512, kernel_size=3, stride=1, padding=1, bias=False),
+#                                       nn.BatchNorm2d(512),
+#                                       nn.ReLU())
+#        for m in self.last_conv.modules():
+#            if isinstance(m,nn.Conv2d):
+#                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+#                m.weight.data.normal_(0,math.sqrt(2. / n))
+#            elif isinstance(m,nn.BatchNorm2d):
+#                m.weight.data.fill_(1)
+#                m.bias.data.zero_()
+#        if use_torch_up:
+#            self.up = nn.UpsamplingBilinear2d(scale_factor=8)
+#        else:
+#            up = nn.ConvTranspose2d(classes, classes, 8, stride=4, padding=3,
+#                                    output_padding=0, groups=classes,
+#                                    bias=False)
+#            #fill_up_weights(up)
+#            #up.weight.requires_grad = False
+#            self.up = up
+#        self.up_4 = nn.ConvTranspose2d(512, 512, 8, stride=2, padding=4,
+#                                    output_padding=0, groups=classes,
+#                                    bias=False)
+#        m = self.up
+#        n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+#        m.weight.data.normal_(0, math.sqrt(2. / n))
+#        m = self.up_4
+#        n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+#        m.weight.data.normal_(0, math.sqrt(2. / n))
+#    def forward(self,x_inp):
+#        x_input = x_inp['d']
+#        x_rgb = x_inp['rgb']
+#        x = F.relu(self.bn1(self.conv1(x_input)))
+#        img = F.relu(self.bn_img(self.conv_img(x_rgb)))
+#        concat_feat = torch.cat((x,img),dim=1)
+#        base_x, low_level_feat  = self.base(concat_feat)
+#        x = self.aspp(base_x)
+#        #print(x.size())
+#        #print(low_level_feat.size())
+#        x = F.interpolate(x, size=(int(math.ceil(-1+x_input.size()[-2]/4)),
+#                                            int(math.ceil(-1+x_input.size()[-1]/4))), mode='bilinear', align_corners=True)
+#        #print("bfor up = ", x.shape)
+#        #x = self.up_4(x) 
+#           
+#        #llf = self.conv2(low_level_feat)
+#        #llf = self.bn2(llf)
+#        #llf = self.relu2(llf)
+#        x = torch.cat((x,low_level_feat),dim=1)
+#        x = self.last_conv(x)
+#        x = self.seg(x)
+#        #y = self.up(x)
+#        y = nn.UpsamplingBilinear2d(size=(x_input.shape[2],x_input.shape[3]))(x)
+#        #y = F.interpolate(x, size=x_input.size()[2:], mode='bilinear', align_corners=True)
+#
+#        return y
+#
+#    def optim_parameters(self, memo=None):
+#        for param in self.base.parameters():
+#            yield param
+#        for param in self.aspp.parameters():
+#            yield param
+#        for param in self.seg.parameters():
+#            yield param
+#        for param in self.last_conv.parameters():
+#            yield param
+#        for param in self.up.parameters():
+#            yield param
 
 class SmallNet(nn.Module):
     def __init__(self):
@@ -425,11 +511,14 @@ class DepthCompletionNet(nn.Module):
             channels = 64 // len(self.modality)
             self.conv1_d = conv_bn_relu(1, channels, kernel_size=3, stride=1, padding=1)
         if 'rgb' in self.modality:
-            channels = 64 * 3 // len(self.modality)
+            channels = 64 * 2 // len(self.modality)
             self.conv1_img = conv_bn_relu(3, channels, kernel_size=3, stride=1, padding=1)
         elif 'g' in self.modality:
             channels = 64 // len(self.modality)
             self.conv1_img = conv_bn_relu(1, channels, kernel_size=3, stride=1, padding=1)
+            
+
+        self.conv1_normal = conv_bn_relu(3, 64//len(self.modality), kernel_size=3, stride=1, padding=1)
 
         pretrained_model = resnet.__dict__['resnet{}'.format(args.layers)](pretrained=args.pretrained)
         if not args.pretrained:
@@ -465,7 +554,7 @@ class DepthCompletionNet(nn.Module):
             kernel_size=kernel_size, stride=1, padding=1)
         self.convtf = conv_bn_relu(in_channels=128, out_channels=1, kernel_size=1, stride=1, bn=False, relu=False)
 
-    def forward(self, x):
+    def forward(self, x, N):
         # first layer
         if 'd' in self.modality:
             conv1_d = self.conv1_d(x['d'])
@@ -474,8 +563,9 @@ class DepthCompletionNet(nn.Module):
         elif 'g' in self.modality:
             conv1_img = self.conv1_img(x['g'])
 
+        conv1_normal = self.conv1_normal(N)
         if self.modality=='rgbd' or self.modality=='gd':
-            conv1 = torch.cat((conv1_d, conv1_img),1)
+            conv1 = torch.cat((conv1_d, conv1_img, conv1_normal),1)
         else:
             conv1 = conv1_d if (self.modality=='d') else conv1_img
 
@@ -509,7 +599,11 @@ class DepthCompletionNet(nn.Module):
         y = self.convtf(y)
 
         return y
-        
+        #if self.training:
+        #    return 100 * y
+        #else:
+        #    min_distance = 0.9
+        #    return F.relu(100 * y - min_distance) + min_distance # the minimum range of Velodyne is around 3 feet ~= 0.9m
 
 
 class ERF(nn.Module):
@@ -590,6 +684,87 @@ class ERF(nn.Module):
             output = layer(output)
 
         output = self.output_conv(output)
+
+        return output
+
+class ERF_N(nn.Module):
+    def __init__(self, encoder=None):  # use encoder to pass pretrained encoder
+        super().__init__()
+
+        self.config = None
+ 
+        self.num_classes = 3
+        self.input_channels = 3
+            
+
+        self.conv1_d = conv_bn_relu(1, 64, kernel_size=3, stride=1, padding=1)
+        self.conv1_img = conv_bn_relu(3, 128, kernel_size=3, stride=1, padding=1)
+    
+        if encoder == None:
+            self.encoder_flag = True
+            self.encoder_layers = nn.ModuleList()
+
+            # layer 1, downsampling
+            self.initial_block = DownsamplerBlock(self.input_channels, 16)
+
+            # layer 2, downsampling
+            self.encoder_layers.append(DownsamplerBlock(in_channel=16, out_channel=64))
+
+            # non-bottleneck 1d - layers 3 to 7
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=64, drop_rate=0.03, dilated=1))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=64, drop_rate=0.03, dilated=1))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=64, drop_rate=0.03, dilated=1))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=64, drop_rate=0.03, dilated=1))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=64, drop_rate=0.03, dilated=1))
+
+            # layer 8, downsampling
+            self.encoder_layers.append(DownsamplerBlock(in_channel=64, out_channel=128))
+
+            # non-bottleneck 1d - layers 9 to 16
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=2))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=4))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=8))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=16))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=2))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=4))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=8))
+            self.encoder_layers.append(non_bottleneck_1d(n_channel=128, drop_rate=0.3, dilated=16))
+
+        else:
+            self.encoder_flag = False
+            self.encoder = encoder
+
+        self.decoder_layers = nn.ModuleList()
+
+        self.decoder_layers.append(UpsamplerBlock(in_channel=128, out_channel=64,output_padding=(0,1)))
+        self.decoder_layers.append(non_bottleneck_1d(n_channel=64, drop_rate=0, dilated=1))
+        self.decoder_layers.append(non_bottleneck_1d(n_channel=64, drop_rate=0, dilated=1))
+
+        self.decoder_layers.append(UpsamplerBlock(in_channel=64, out_channel=16))
+        self.decoder_layers.append(non_bottleneck_1d(n_channel=16, drop_rate=0, dilated=1))
+        self.decoder_layers.append(non_bottleneck_1d(n_channel=16, drop_rate=0, dilated=1))
+
+        self.output_conv = nn.ConvTranspose2d(in_channels=16, out_channels=self.num_classes,kernel_size=2, stride=2, padding=0, output_padding=0, bias=True)
+
+        # self.apply(weights_init_normal)
+
+    def forward(self, x):
+
+        #conv1_d = self.conv1_d(x['d'])
+        #conv1_img = self.conv1_img(x['rgb'])
+        #conv1 = torch.cat((conv1_d, conv1_img),1)
+        #conv1 = torch.cat((x['d'], x['rgb']),1)
+        if self.encoder_flag:
+            output = self.initial_block(x['rgb'])
+            for layer in self.encoder_layers:
+                output = layer(output)
+        else:
+            output = self.encoder(conv1)
+
+        for layer in self.decoder_layers:
+            output = layer(output)
+
+        output = nn.Tanh()(self.output_conv(output))
 
         return output
 

@@ -2,6 +2,19 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 
+class MaskedL1Loss(nn.Module):
+    def __init__(self):
+        super(MaskedL1Loss, self).__init__()
+
+    def forward(self, pred, target):
+        assert pred.dim() == target.dim(), "inconsistent dimensions"
+        valid_mask = (target>0).detach()
+        diff = target - pred
+        diff = diff[valid_mask]
+        self.loss = diff.abs().mean()
+        return self.loss
+
+
 class SmoothnessLoss(nn.Module):
     def __init__(self):
         super(SmoothnessLoss, self).__init__()
@@ -28,18 +41,23 @@ class MaskedMSELoss(nn.Module):
         self.loss = (diff ** 2).mean()
         return self.loss
 
-class MaskedL1Loss(nn.Module):
+
+class MaskedNormalLoss(nn.Module):
     def __init__(self):
-        super(MaskedL1Loss, self).__init__()
+        super(MaskedNormalLoss, self).__init__()
 
     def forward(self, pred, target):
         assert pred.dim() == target.dim(), "inconsistent dimensions"
-        valid_mask = (target>0).detach()
-        diff = target - pred
-        diff = diff[valid_mask]
-        self.loss = diff.abs().mean()
+        pred_norm = torch.norm(pred,dim=1,keepdim=True)
+        target_norm = torch.norm(target,dim=1,keepdim=True)
+        valid_mask = (target_norm>0).detach()
+        valid_mask_pred = (pred_norm>0).detach()
+        final_valid_mask = valid_mask*valid_mask_pred
+        pred_normalized = pred/pred_norm
+        dotprod = torch.sum(target*pred_normalized,1,keepdim=True) # Sum along normal channel
+        dotprod = dotprod[final_valid_mask]
+        self.loss = -dotprod.mean()
         return self.loss
-
 
 
 class PhotometricLoss(nn.Module):

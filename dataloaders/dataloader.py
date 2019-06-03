@@ -5,7 +5,7 @@ import torch.utils.data as data
 import h5py
 import cv2
 import dataloaders.transforms as transforms
-from estimate_pose import get_pose
+from estimate_pose import get_pose, estimate_normals
 
 IMG_EXTENSIONS = ['.h5',]
 
@@ -137,7 +137,7 @@ class MyDataloader(data.Dataset):
         """
         path, target = self.imgs[index]
         rgb, depth = self.loader(path)
-        rgb_near = near_rgb(path,self.loader)
+        rgb_near = None #near_rgb(path,self.loader)
         return rgb, depth, rgb_near
 
     def __getitem__(self, index):
@@ -150,7 +150,7 @@ class MyDataloader(data.Dataset):
         # If in train mode, compute pose for near image
         #print("K = ", self.K)
         rot_mat, t_vec = None, None
-        if self.mode == "train":
+        if self.mode == "train" and (rgb_near_np is not None):
             rgb_cv = (rgb_np*255).astype(np.uint8)
             rgb_near_cv = (rgb_near_np*255).astype(np.uint8)
             succ, rot_vec, t_vec = get_pose(rgb_cv, depth_np, rgb_near_cv, self.K)
@@ -180,8 +180,10 @@ class MyDataloader(data.Dataset):
         #depth_tensor = depth_tensor.unsqueeze(0)
         #rgb_near_tensor = to_tensor(rgb_near)
         #print(input_np.shape) 
+
+        normal_np = estimate_normals(depth_np)
         candidates = {"rgb":rgb_np, "gt":np.expand_dims(depth_np,-1), "d":input_np[:,:,3:], \
-                      "r_mat":rot_mat, "t_vec":t_vec, "rgb_near":rgb_near_np}
+                      "r_mat":rot_mat, "t_vec":t_vec, "rgb_near":rgb_near_np, "normals":normal_np}
 
 
         #print(self.K)
