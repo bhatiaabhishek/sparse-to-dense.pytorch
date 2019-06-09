@@ -49,7 +49,7 @@ python3 main.py --help
 
 For CS230 TAs, run the following command to train a network with UNET-based encoder-decoded, and both RGB and 200 random sparse depth samples as the input to the network with a batch size 4.
 ```bash
-python3 main.py -a UNET -m rgbd -s 200 --data nyudepthv2 --lr 0.00001 --batch-size 4
+python3 main.py -a UNET -m rgbd -s 200 --data nyudepthv2 --lr 0.00001 --batch-size 4 --use_pose True
 ```
 
 Training results will be saved under the `results` folder. To resume a previous training, run
